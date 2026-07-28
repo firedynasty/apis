@@ -1,0 +1,18 @@
+on run {input, parameters}
+	if (count of input) > 0 then
+		set fileArgs to ""
+		repeat with selectedFile in input
+			set filePath to POSIX path of selectedFile
+			set fileArgs to fileArgs & " " & quoted form of filePath
+		end repeat
+
+		set shellScript to "/Users/stanleytan/Documents/technical/apis_microsoft/onenote_upload_files.sh" & fileArgs
+
+		tell application "Terminal"
+			activate
+			do script shellScript
+		end tell
+	else
+		display dialog "No files were selected." buttons {"OK"} default button "OK"
+	end if
+end run

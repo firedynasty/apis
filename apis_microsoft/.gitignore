@@ -1,0 +1,6 @@
+# OAuth token cache — never commit this
+~/.onenote_token.json
+*.token.json
+
+# macOS
+.DS_Store

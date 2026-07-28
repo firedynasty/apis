@@ -1,0 +1,51 @@
+OneNote CLI — How to Use
+========================
+
+Two main ways to interact with your OneNote:
+
+1. BROWSE YOUR NOTES
+--------------------
+Run:
+    onenote-browse
+
+Navigate by typing numbers:
+    - Pick a notebook number → see sections
+    - Pick a section number → see pages
+    - Pick a page number → read the note (clean text, no HTML)
+
+Navigation:
+    ..    go back up a level
+    q     quit
+    c2    copy a section ID to clipboard (at the sections level, replace 2 with any number)
+    c     copy current section ID to clipboard (at the pages level)
+
+
+2. UPLOAD FILES TO ONENOTE (Right-Click in Finder)
+---------------------------------------------------
+First, get a section ID:
+    1. Run onenote-browse
+    2. Pick your notebook
+    3. Type c2 (or c + section number) to copy the section ID to clipboard
+
+Then, upload files:
+    1. Select files in Finder (.md, .txt, or .html)
+    2. Right-click → Send to OneNote
+    3. Section ID is pre-filled from clipboard → click Upload
+    4. Watch progress in the Terminal window that opens
+
+Supported file types:
+    .md    → converted to HTML with full formatting (headers, bold, links, etc.)
+    .txt   → wrapped in basic HTML paragraphs
+    .html  → uploaded as-is
+
+
+FIRST-TIME SETUP
+----------------
+If not already done:
+    1. Set your client ID:
+       export ONENOTE_CLIENT_ID=your-client-id-here
+
+    2. Sign in:
+       onenote-login
+
+    Token caches at ~/.onenote_token.json and auto-refreshes.
