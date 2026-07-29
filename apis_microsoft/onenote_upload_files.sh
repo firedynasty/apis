@@ -7,7 +7,7 @@
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
-ONENOTE="/Users/stanleytan/Documents/technical/apis_microsoft/onenote_signin.py"
+ONENOTE="/Users/stanleytan/Documents/technical/github/apis/apis_microsoft/onenote_signin.py"
 MD_TO_HTML="/Users/stanleytan/Documents/technical/python/convert_html_to_docx/02evernote/mdToHtml.py"
 
 # Prompt for section ID with clipboard pre-filled
@@ -82,7 +82,7 @@ if [ ${#FILES[@]} -eq 1 ]; then
                 echo "FAILED: $filename — md conversion failed"
             fi
             ;;
-        txt|html|htm|docx)
+        txt|csv|html|htm|docx)
             python3 "$ONENOTE" upload "$filepath" --title "$title" --section "$SECTION_ID"
             ;;
         *)
@@ -103,8 +103,27 @@ else
         exit 0
     fi
 
-    echo "Bundling ${#FILES[@]} file(s) into page '$PAGE_TITLE'..."
-    python3 "$ONENOTE" upload-files --title "$PAGE_TITLE" --section "$SECTION_ID" "${FILES[@]}"
+    # Convert any .csv files to temp .txt copies so the bundler accepts them
+    CONVERTED_TMPS=()
+    UPLOAD_FILES=()
+    for f in "${FILES[@]}"; do
+        fext="${f##*.}"
+        fext=$(echo "$fext" | tr '[:upper:]' '[:lower:]')
+        if [ "$fext" = "csv" ]; then
+            tmpcsv="/tmp/onenote_csv_$$.$(basename "${f%.csv}").txt"
+            cp "$f" "$tmpcsv"
+            CONVERTED_TMPS+=("$tmpcsv")
+            UPLOAD_FILES+=("$tmpcsv")
+        else
+            UPLOAD_FILES+=("$f")
+        fi
+    done
+
+    echo "Bundling ${#UPLOAD_FILES[@]} file(s) into page '$PAGE_TITLE'..."
+    python3 "$ONENOTE" upload-files --title "$PAGE_TITLE" --section "$SECTION_ID" "${UPLOAD_FILES[@]}"
+
+    # Clean up temp csv→txt copies
+    for t in "${CONVERTED_TMPS[@]}"; do rm -f "$t"; done
 fi
 
 echo ""
