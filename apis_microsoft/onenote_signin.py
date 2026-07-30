@@ -22,8 +22,11 @@ Commands:
 Token cache lives at ~/.onenote_token.json
 """
 
+import datetime
+import html
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -39,6 +42,64 @@ TOKEN_FILE = os.path.expanduser("~/.onenote_token.json")
 GRAPH = "https://graph.microsoft.com/v1.0"
 AUTH = f"https://login.microsoftonline.com/{TENANT}/oauth2/v2.0"
 # ----------------------------------------------------------------------------
+
+ONENOTE_TEMPLATE = (
+    "<!DOCTYPE html><html><head>"
+    "<title>{title}</title>"
+    "<meta name='created' content='{created}'/>"
+    "</head><body>{body}</body></html>"
+)
+
+
+def _fix_pre_blocks(body_html):
+    """Convert <pre> blocks to OneNote-safe divs.
+
+    OneNote collapses whitespace inside <pre>, turning fenced code into one
+    run-on line.  Replace each block with a <div> that uses an inline
+    monospace font, <br/> for newlines, and &nbsp; chains for leading spaces.
+    """
+    def replace_pre(m):
+        # Strip one outer <code> wrapper if present
+        inner = re.sub(r'^<code[^>]*>(.*)</code>$', r'\1', m.group(1).strip(), flags=re.S)
+        lines = inner.split('\n')
+        converted = []
+        for line in lines:
+            # Preserve leading indentation via &nbsp;
+            stripped = line.lstrip(' ')
+            spaces = len(line) - len(stripped)
+            nbsp = '&nbsp;' * spaces
+            converted.append(nbsp + html.escape(stripped) if stripped else '')
+        inner_html = '<br/>'.join(converted)
+        return (
+            '<div style="font-family:Courier New,monospace;font-size:10pt;'
+            'background:#f5f5f5;border:1px solid #ddd;padding:6px;'
+            'margin:6px 0;">' + inner_html + '</div>'
+        )
+
+    return re.sub(r'<pre[^>]*>(.*?)</pre>', replace_pre, body_html, flags=re.S)
+
+
+def _md_to_fragment(fpath):
+    """Convert a .md file to a clean HTML fragment using typora-export -n -e,
+    then apply OneNote pre-block fixups. Returns the fragment string."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix='.html', delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(
+            ['typora-export', '-n', '-e', '-o', tmp_path, fpath],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        with open(tmp_path, 'r', encoding='utf-8') as f:
+            fragment = f.read()
+    finally:
+        os.unlink(tmp_path)
+
+    return _fix_pre_blocks(fragment)
 
 
 def _post(url, data):
@@ -177,15 +238,55 @@ def update(page_id, path):
 
 
 def upload(path, title=None, section_id=None):
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    if title is None:
-        title = os.path.splitext(os.path.basename(path))[0]
-    # If it's not already a full HTML doc, wrap it.
-    if "<html" not in content.lower():
-        body = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        body = "".join(f"<p>{line}</p>" for line in body.splitlines() if line.strip())
-        content = f"<!DOCTYPE html><html><head><title>{title}</title></head><body>{body}</body></html>"
+    import subprocess
+    import tempfile
+
+    title = title or os.path.splitext(os.path.basename(path))[0]
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.md', '.markdown'):
+        # Use typora-export to get a clean HTML fragment (no Typora divs or bare spans)
+        with tempfile.NamedTemporaryFile(suffix='.html', delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            result = subprocess.run(
+                ['typora-export', '-n', '-e', '-o', tmp_path, path],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                sys.exit(f"typora-export failed: {result.stderr.strip()}")
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                body = f.read()
+        finally:
+            os.unlink(tmp_path)
+
+        # OneNote post-processing
+        body = _fix_pre_blocks(body)
+        body = body.replace('<p>&nbsp;</p>', '')
+        body = re.sub(r'<p>\s*</p>', '', body)
+        # Drop leading H1 that duplicates the page title
+        body = re.sub(
+            r'^\s*<h1[^>]*>' + re.escape(html.escape(title)) + r'</h1>',
+            '', body, count=1, flags=re.I,
+        )
+        created = datetime.datetime.now().astimezone().isoformat()
+        content = ONENOTE_TEMPLATE.format(
+            title=html.escape(title), created=created, body=body)
+
+    else:
+        with open(path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        if '<html' in text[:200].lower():
+            # Already a full HTML doc — send as-is
+            content = text
+        else:
+            # Plain text: wrap each line in a paragraph
+            created = datetime.datetime.now().astimezone().isoformat()
+            body = ''.join(f'<p>{html.escape(l)}</p>'
+                           for l in text.splitlines() if l.strip())
+            content = ONENOTE_TEMPLATE.format(
+                title=html.escape(title), created=created, body=body)
+
     endpoint = (f"/me/onenote/sections/{section_id}/pages" if section_id
                 else "/me/onenote/pages")
     res = _graph("POST", endpoint, headers={"Content-Type": "text/html"},
@@ -198,20 +299,10 @@ def upload(path, title=None, section_id=None):
 
 def upload_folder(folder, title=None, section_id=None):
     import mimetypes
-    import importlib.util
     import re as _re
     import html as _html
 
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
-
-    # Load mdToHtml converter for proper markdown rendering
-    _md_to_html = None
-    _md_converter_path = "/Users/stanleytan/Documents/technical/python/convert_html_to_docx/02evernote/mdToHtml.py"
-    if os.path.exists(_md_converter_path):
-        spec = importlib.util.spec_from_file_location("mdToHtml", _md_converter_path)
-        _mdmod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_mdmod)
-        _md_to_html = _mdmod.md_to_html
 
     if title is None:
         title = os.path.basename(folder.rstrip("/").rstrip("\\")) or "Untitled"
@@ -236,13 +327,11 @@ def upload_folder(folder, title=None, section_id=None):
             body_html += f"<h2>{heading}</h2>{inner}"
 
         elif ext == ".md":
-            with open(fpath, "r", encoding="utf-8") as f:
-                content = f.read()
-            if _md_to_html:
-                inner = _md_to_html(content)
-            else:
-                escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                inner = "".join(f"<p>{line}</p>" for line in escaped.splitlines() if line.strip())
+            try:
+                inner = _md_to_fragment(fpath)
+            except Exception as e:
+                print(f"SKIPPED: {fname} — typora-export failed: {e}")
+                continue
             body_html += f"<h2>{heading}</h2>{inner}"
 
         elif ext in {".html", ".htm"}:
@@ -347,20 +436,11 @@ def upload_folder(folder, title=None, section_id=None):
 def upload_files(filepaths, title=None, section_id=None, max_mb=18):
     """Bundle a list of files into one OneNote page (chunked if too large)."""
     import mimetypes
-    import importlib.util
     import re as _re
     import html as _html
     import subprocess
 
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
-
-    _md_to_html = None
-    _md_converter_path = "/Users/stanleytan/Documents/technical/python/convert_html_to_docx/02evernote/mdToHtml.py"
-    if os.path.exists(_md_converter_path):
-        spec = importlib.util.spec_from_file_location("mdToHtml", _md_converter_path)
-        _mdmod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_mdmod)
-        _md_to_html = _mdmod.md_to_html
 
     if title is None:
         title = os.path.splitext(os.path.basename(filepaths[0]))[0]
@@ -390,10 +470,11 @@ def upload_files(filepaths, title=None, section_id=None, max_mb=18):
             html_snip = f"<h2>{heading}</h2>{inner}"
 
         elif ext == ".md":
-            with open(fpath, "r", encoding="utf-8") as f:
-                content = f.read()
-            inner = _md_to_html(content) if _md_to_html else "".join(
-                f"<p>{line}</p>" for line in content.splitlines() if line.strip())
+            try:
+                inner = _md_to_fragment(fpath)
+            except Exception as e:
+                print(f"  SKIPPED: {fname} — typora-export failed: {e}")
+                continue
             html_snip = f"<h2>{heading}</h2>{inner}"
 
         elif ext in {".html", ".htm"}:

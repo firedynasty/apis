@@ -1,0 +1,27 @@
+on run {input, parameters}
+	if (count of input) > 0 then
+		set fileArgs to ""
+		repeat with selectedFile in input
+			set filePath to POSIX path of selectedFile
+			set fileArgs to fileArgs & " " & quoted form of filePath
+		end repeat
+		
+		set LF to ASCII character 10
+		set tmpScript to "/tmp/onenote_upload_run.sh"
+		set shellCmd to "#!/bin/bash" & LF & "/Users/stanleytan/Documents/technical/github/apis/apis_microsoft/onenote_upload_files.sh" & fileArgs & LF
+		
+		-- Write to temp file (avoids Terminal's do script character limit)
+		set fileRef to open for access POSIX file tmpScript with write permission
+		set eof fileRef to 0
+		write shellCmd to fileRef
+		close access fileRef
+		
+		tell application "Terminal"
+			activate
+			do script "bash " & quoted form of tmpScript
+		end tell
+	else
+		display dialog "No files were selected." buttons {"OK"} default button "OK"
+	end if
+end run
+

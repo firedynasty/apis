@@ -8,7 +8,6 @@
 export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 ONENOTE="/Users/stanleytan/Documents/technical/github/apis/apis_microsoft/onenote_signin.py"
-MD_TO_HTML="/Users/stanleytan/Documents/technical/python/convert_html_to_docx/02evernote/mdToHtml.py"
 
 # Prompt for section ID with clipboard pre-filled
 SECTION_ID=$(osascript -e 'try
@@ -71,18 +70,7 @@ if [ ${#FILES[@]} -eq 1 ]; then
     [ -n "$PREFIX" ] && title="$PREFIX - $title"
 
     case "$ext" in
-        md)
-            tmpfile="/tmp/onenote_upload_$$.html"
-            echo "Converting $filename → HTML..."
-            python3 "$MD_TO_HTML" "$filepath" "$tmpfile"
-            if [ -f "$tmpfile" ]; then
-                python3 "$ONENOTE" upload "$tmpfile" --title "$title" --section "$SECTION_ID"
-                rm -f "$tmpfile"
-            else
-                echo "FAILED: $filename — md conversion failed"
-            fi
-            ;;
-        txt|csv|html|htm|docx)
+        md|txt|csv|html|htm|docx)
             python3 "$ONENOTE" upload "$filepath" --title "$title" --section "$SECTION_ID"
             ;;
         *)
